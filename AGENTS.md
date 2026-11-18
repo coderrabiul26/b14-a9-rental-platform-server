@@ -17,7 +17,7 @@
 - `.env` contains a live Atlas credential: never commit it, print it, or paste it into other files/logs.
 
 ## Gotchas
-- `.gitignore` line 1 is `node_modules,` (trailing comma typo), so `node_modules/` is NOT ignored — git shows it as untracked. Do not commit it; fix the line if you touch `.gitignore`.
+- `.gitignore` covers `node_modules/` and `.env` — keep both ignored; never force-add them (`git add -f`).
 - Express **5** (not 4): async handler rejections go to the error handler automatically; path syntax is path-to-regexp v8 — use `/*splat`-style wildcards, plain `*` patterns fail.
 - CORS is wide open (`app.use(cors())` with no options) — keep as-is unless asked to restrict origins.
-- Fresh repo: branch `main` has no commits yet, no remote, no CI, no pre-commit hooks.
+- No remote, no CI, no pre-commit hooks yet (branch `main`, root commit `2f4c15d`).
