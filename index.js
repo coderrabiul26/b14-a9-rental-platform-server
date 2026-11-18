@@ -1,0 +1,42 @@
+import express from 'express'
+import cors from 'cors'
+import 'dotenv/config'
+
+
+const app= express()
+
+app.use(cors())
+app.use(express.json())
+
+import { MongoClient } from 'mongodb';
+
+const client = new MongoClient(process.env.MONGODB_URI);
+
+export async function connectToMongoDB() {
+  try {
+    await client.connect();
+    console.log("You successfully connected to MongoDB!");
+    return client;
+  } catch (err) {
+    console.dir(err);
+  }
+}
+
+const connectedClient= await connectToMongoDB()
+const db= connectedClient.db('rental-platform')
+
+const usersCollection= db.collection('users')
+const equipmentCollection= db.collection('equipment')
+const bookingsCollection= db.collection('bookings')
+const paymentsCollection= db.collection('payments')
+
+
+
+app.listen(5000, ()=>{
+    console.log('server is running on port 5000');
+})
+
+app.get('/equipment', async(req, res)=>{
+    const result= await equipmentCollection.find({}).toArray()
+    res.send(result)
+})
