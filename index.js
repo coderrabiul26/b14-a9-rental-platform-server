@@ -31,9 +31,18 @@ const bookingsCollection= db.collection('bookings')
 const paymentsCollection= db.collection('payments')
 
 
+// http://localhost:5000/api/addEquipment
 
 app.listen(5000, ()=>{
     console.log('server is running on port 5000');
+})
+
+// equipment related api
+
+app.post('/api/addEquipment', async(req, res)=>{
+  const equipment= req.body
+  const result= await equipmentCollection.insertOne(equipment)
+  res.send(result)
 })
 
 app.get('/equipment', async(req, res)=>{
