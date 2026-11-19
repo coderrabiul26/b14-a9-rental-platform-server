@@ -45,7 +45,11 @@ app.post('/api/addEquipment', async(req, res)=>{
   res.send(result)
 })
 
-app.get('/equipment', async(req, res)=>{
-    const result= await equipmentCollection.find({}).toArray()
+app.get('/api/ownerApplication', async(req, res)=>{
+  const query={}
+  if(req.query){
+    query.ownerEmail= req.query.ownerEmail
+  }
+    const result= await equipmentCollection.find(query).toArray()
     res.send(result)
 })
