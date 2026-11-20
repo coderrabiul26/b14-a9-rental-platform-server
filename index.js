@@ -45,7 +45,7 @@ app.post('/api/addEquipment', async(req, res)=>{
   res.send(result)
 })
 
-app.get('/api/ownerApplication', async(req, res)=>{
+app.get('/api/ownerEquipment', async(req, res)=>{
   const query={}
   if(req.query){
     query.ownerEmail= req.query.ownerEmail
@@ -54,8 +54,44 @@ app.get('/api/ownerApplication', async(req, res)=>{
     res.send(result)
 })
 
+
+// all equipment page public route api
+
+app.get('/api/allEquipment', async(req, res)=>{
+  const query={}
+  if(req.query){
+    if(req.query.category){
+      query.category= req.query.category
+    }
+    if(req.query.rentalType){
+      query.rentalType= req.query.rentalType
+    }
+    if(req.query.rentalPrice){
+      query.rentalPrice= req.query.rentalPrice
+    }
+    if(req.query.availableQuantity){
+      query.availableQuantity= req.query.availableQuantity
+    }
+    if(req.query.search){
+      query.$or=[
+        {name: {$regex: req.query.search, $options: 'i'}},
+        {location: {$regex: req.query.search, $options: 'i'}},
+        {brand: {$regex: req.query.search, $options: 'i'}}
+      ]
+    }
+  }
+    const result= await equipmentCollection.find(query).toArray()
+    res.send(result)
+})
+
+
+
 app.delete('/api/deleteEquipment/:id', async(req, res)=>{
   const {id}= req.params
   const result= await equipmentCollection.deleteOne({_id: new ObjectId(id)})
   res.send(result)
 })
+
+
+
+
