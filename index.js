@@ -28,6 +28,7 @@ const db= connectedClient.db('rental-platform')
 const usersCollection= db.collection('users')
 const equipmentCollection= db.collection('equipment')
 const bookingsCollection= db.collection('bookings')
+const favouriteCollection= db.collection('favourites')
 const paymentsCollection= db.collection('payments')
 
 
@@ -45,12 +46,26 @@ app.post('/api/addEquipment', async(req, res)=>{
   res.send(result)
 })
 
+
+app.post('/api/addFavourite', async(req, res)=>{
+  const equipment= req.body
+  const result= await favouriteCollection.insertOne(equipment)
+  res.send(result)
+})
+
 app.get('/api/ownerEquipment', async(req, res)=>{
   const query={}
   if(req.query){
     query.ownerEmail= req.query.ownerEmail
   }
     const result= await equipmentCollection.find(query).toArray()
+    res.send(result)
+})
+
+
+app.get('/api/equipmentDetails/:id', async(req, res)=>{
+    const {id}=req.params
+    const result= await equipmentCollection.findOne({_id:new ObjectId(id)})
     res.send(result)
 })
 
