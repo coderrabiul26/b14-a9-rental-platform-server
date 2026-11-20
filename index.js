@@ -8,7 +8,7 @@ const app= express()
 app.use(cors())
 app.use(express.json())
 
-import { MongoClient } from 'mongodb';
+import { MongoClient, ObjectId } from 'mongodb';
 
 const client = new MongoClient(process.env.MONGODB_URI);
 
@@ -52,4 +52,10 @@ app.get('/api/ownerApplication', async(req, res)=>{
   }
     const result= await equipmentCollection.find(query).toArray()
     res.send(result)
+})
+
+app.delete('/api/deleteEquipment/:id', async(req, res)=>{
+  const {id}= req.params
+  const result= await equipmentCollection.deleteOne({_id: new ObjectId(id)})
+  res.send(result)
 })
