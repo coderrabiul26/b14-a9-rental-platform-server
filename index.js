@@ -225,6 +225,7 @@ app.get("/api/equipmentDetails/:id", async (req, res) => {
 // all equipment page public route api
 
 app.get("/api/allEquipment", async (req, res) => {
+  
   const query = {};
   if (req.query) {
     if (req.query.category) {
@@ -238,6 +239,9 @@ app.get("/api/allEquipment", async (req, res) => {
     }
     if (req.query.availableQuantity) {
       query.availableQuantity = req.query.availableQuantity;
+    }
+    if(req.query.status){
+      query.status= req.query.status;
     }
     if (req.query.search) {
       query.$or = [
@@ -446,4 +450,115 @@ app.get("/api/user/:id/premium", async (req, res) => {
 
   // Always answer with JSON (never res.send(null)).
   res.json({ premium: user?.premium === true || Boolean(payment) });
+});
+
+
+// ────────────────────────────────────────────────────────────
+// Customer Dashboard APIs
+// ────────────────────────────────────────────────────────────
+
+// GET /api/customerBookings?email=...
+// Returns all bookings made by this customer
+app.get("/api/customerBookings", async (req, res) => {
+  try {
+    const { email } = req.query;
+    const query = {};
+    if (email) {
+      query.$or = [
+        { customerEmail: { $regex: `^${email.trim()}$`, $options: "i" } },
+        { email: { $regex: `^${email.trim()}$`, $options: "i" } },
+        { customerId: email.trim() },
+      ];
+    }
+    const result = await bookingsCollection
+      .find(query)
+      .sort({ bookingDate: -1, createdAt: -1 })
+      .toArray();
+    res.send(result);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// GET /api/customerFavourites?email=...
+// Returns all saved favorite equipment for this customer
+app.get("/api/customerFavourites", async (req, res) => {
+  try {
+    const { email } = req.query;
+    const query = {};
+    if (email) {
+      query.$or = [
+        { customerEmail: { $regex: `^${email.trim()}$`, $options: "i" } },
+        { email: { $regex: `^${email.trim()}$`, $options: "i" } },
+        { customerId: email.trim() },
+      ];
+    }
+    const result = await favouriteCollection
+      .find(query)
+      .sort({ createdAt: -1, bookingDate: -1 })
+      .toArray();
+    res.send(result);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// DELETE /api/removeFavourite/:id
+// Removes an item from the customer's favorites
+app.delete("/api/removeFavourite/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    let query = {};
+    if (ObjectId.isValid(id)) {
+      query = { $or: [{ _id: new ObjectId(id) }, { equipmentId: id }] };
+    } else {
+      query = { equipmentId: id };
+    }
+    const result = await favouriteCollection.deleteOne(query);
+    res.send(result);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// GET /api/user/profile?email=...
+// Returns the profile information of the user
+app.get("/api/user/profile", async (req, res) => {
+  try {
+    const { email } = req.query;
+    if (!email) {
+      return res.status(400).json({ success: false, message: "Email is required" });
+    }
+    const user = await usersCollection.findOne({ email });
+    if (!user) {
+      return res.status(404).json({ success: false, message: "User not found" });
+    }
+    res.send(user);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// PUT /api/user/profile
+// Updates the user profile details (name, image, phoneNumber, address)
+app.put("/api/user/profile", async (req, res) => {
+  try {
+    const { email, name, image, phoneNumber, address } = req.body;
+    if (!email) {
+      return res.status(400).json({ success: false, message: "Email is required" });
+    }
+    const updateDoc = {
+      $set: {
+        ...(name && { name }),
+        ...(image && { image }),
+        ...(phoneNumber !== undefined && { phoneNumber }),
+        ...(address !== undefined && { address }),
+        updatedAt: new Date(),
+      },
+    };
+    const result = await usersCollection.updateOne({ email }, updateDoc);
+    res.send({ success: true, result });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
 });
