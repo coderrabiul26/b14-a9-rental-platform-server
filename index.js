@@ -562,3 +562,145 @@ app.put("/api/user/profile", async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 });
+
+
+// ────────────────────────────────────────────────────────────
+// Owner Dashboard APIs
+// ────────────────────────────────────────────────────────────
+
+// GET /api/ownerRentals?ownerEmail=...
+// Returns all rental bookings made on the owner's equipment
+app.get("/api/ownerRentals", async (req, res) => {
+  try {
+    const { ownerEmail } = req.query;
+    if (!ownerEmail) {
+      const allRentals = await bookingsCollection
+        .find({})
+        .sort({ bookingDate: -1, createdAt: -1 })
+        .toArray();
+      return res.send(allRentals);
+    }
+
+    // Find all equipment owned by this owner
+    const equipments = await equipmentCollection
+      .find({ ownerEmail: { $regex: `^${ownerEmail.trim()}$`, $options: "i" } })
+      .toArray();
+    const equipmentIds = equipments.map((e) => String(e._id));
+
+    // Find bookings where equipmentId belongs to the owner OR ownerEmail matches
+    const rentals = await bookingsCollection
+      .find({
+        $or: [
+          { equipmentId: { $in: equipmentIds } },
+          { ownerEmail: { $regex: `^${ownerEmail.trim()}$`, $options: "i" } },
+        ],
+      })
+      .sort({ bookingDate: -1, createdAt: -1 })
+      .toArray();
+
+    res.send(rentals);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// GET /api/ownerAnalytics?ownerEmail=... (Challenge 3: Owner Analytics)
+app.get("/api/ownerAnalytics", async (req, res) => {
+  try {
+    const { ownerEmail } = req.query;
+    if (!ownerEmail) {
+      return res.status(400).json({ success: false, message: "ownerEmail is required" });
+    }
+
+    // 1. Total listed equipment
+    const totalEquipment = await equipmentCollection.countDocuments({
+      ownerEmail: { $regex: `^${ownerEmail.trim()}$`, $options: "i" },
+    });
+
+    // 2. Fetch owner equipment IDs to link bookings
+    const equipments = await equipmentCollection
+      .find({ ownerEmail: { $regex: `^${ownerEmail.trim()}$`, $options: "i" } })
+      .toArray();
+    const equipmentIds = equipments.map((e) => String(e._id));
+
+    const bookings = await bookingsCollection
+      .find({
+        $or: [
+          { equipmentId: { $in: equipmentIds } },
+          { ownerEmail: { $regex: `^${ownerEmail.trim()}$`, $options: "i" } },
+        ],
+      })
+      .toArray();
+
+    // 3. Stats calculations
+    const totalRentals = bookings.length;
+    const completedRentals = bookings.filter((b) => b.bookingStatus === "completed").length;
+    const activeRentals = bookings.filter(
+      (b) => b.bookingStatus === "active" || (b.paymentStatus === "paid" && b.bookingStatus !== "completed")
+    ).length;
+    const totalEarnings = bookings
+      .filter((b) => b.paymentStatus === "paid")
+      .reduce((sum, b) => sum + (Number(b.amount) || 0), 0);
+
+    // 4. Monthly earnings aggregation for charts
+    const monthlyMap = {};
+    const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    
+    const now = new Date();
+    for (let i = 5; i >= 0; i--) {
+      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+      const key = `${monthNames[d.getMonth()]}`;
+      monthlyMap[key] = 0;
+    }
+
+    bookings.forEach((b) => {
+      if (b.paymentStatus === "paid") {
+        const d = b.bookingDate ? new Date(b.bookingDate) : new Date(b.createdAt || now);
+        const key = `${monthNames[d.getMonth()]}`;
+        if (monthlyMap[key] !== undefined) {
+          monthlyMap[key] += Number(b.amount) || 0;
+        } else {
+          monthlyMap[key] = Number(b.amount) || 0;
+        }
+      }
+    });
+
+    const monthlyEarnings = Object.entries(monthlyMap).map(([month, earnings]) => ({
+      month,
+      earnings,
+    }));
+
+    res.send({
+      success: true,
+      totalEquipment,
+      totalRentals,
+      completedRentals,
+      activeRentals,
+      totalEarnings,
+      monthlyEarnings,
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// PUT /api/updateEquipment/:id
+// Updates one equipment listing
+app.put("/api/updateEquipment/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!ObjectId.isValid(id)) {
+      return res.status(400).json({ success: false, message: "Invalid equipment ID" });
+    }
+    const updateData = req.body;
+    delete updateData._id;
+
+    const result = await equipmentCollection.updateOne(
+      { _id: new ObjectId(id) },
+      { $set: { ...updateData, updatedAt: new Date() } }
+    );
+    res.send({ success: true, result });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
