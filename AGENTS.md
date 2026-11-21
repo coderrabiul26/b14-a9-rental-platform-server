@@ -3,8 +3,8 @@
 ## Overview
 - Single-file Express 5 API for a rental platform. `index.js` is the entire app: entrypoint, DB wiring, and all routes. Add new routes there — do not invent a `src/` structure.
 - ESM only (`"type": "module"`) with top-level `await`. Needs a Node version supporting top-level await (14.8+).
-- MongoDB via the official `mongodb` driver (no Mongoose). DB name `rental-platform`; collections: `users`, `equipment`, `bookings`, `payments`. All defined as module-level consts in `index.js`.
-- Currently one route: `GET /equipment`.
+- MongoDB via the official `mongodb` driver (no Mongoose). DB name `rental-platform`. Better Auth owns the **singular** collections `user`, `session`, `account`, `verification` (there is no `users` collection — querying it matches 0 documents). The app's own collections are `equipment`, `bookings`, `favourites`, `payments`. All defined as module-level consts in `index.js`.
+- Routes all live in `index.js`: equipment (`/api/addEquipment`, `/api/allEquipment`, `/api/equipmentDetails/:id`, `/api/ownerEquipment`, `/api/deleteEquipment/:id`), booking/favourites (`/api/addBooking`, `/api/addFavourite`), the booking-modal flow (`POST /api/prepareBooking` → validates dates/quantity, checks overlapping **paid** bookings, computes `amount = unitPrice × units × quantity`, stores a `payment_status:"pending"` row in `payments` and returns its `paymentId`; `GET /api/payment/:id` returns that row), user premium (`/api/user/:id/premium` → `{ premium: boolean }`) and Stripe (`POST /payment/checkout-verify`: for sessions with `metadata.paymentId` it writes the transaction onto the payment row, flips it to `paid`, and creates the booking record — idempotent on refresh; sessions without it take the legacy plan path). Always answer with JSON — `res.send(null)` sends an empty body and crashes the client's `response.json()`.
 
 ## Commands
 - Start server: `node index.js` — listens on port **5000** (hardcoded). There is no `start`/`dev` script.
