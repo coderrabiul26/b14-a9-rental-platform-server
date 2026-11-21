@@ -53,6 +53,13 @@ app.post('/api/addFavourite', async(req, res)=>{
   res.send(result)
 })
 
+
+app.post('/api/addBooking', async(req, res)=>{
+  const equipment= req.body
+  const result= await bookingsCollection.insertOne(equipment)
+  res.send(result)
+})
+
 app.get('/api/ownerEquipment', async(req, res)=>{
   const query={}
   if(req.query){
