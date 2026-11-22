@@ -43,6 +43,10 @@ app.listen(5000, () => {
   console.log("server is running on port 5000");
 });
 
+app.get("/", (req, res) => {
+  res.send("Rental Platform API Server is running successfully!");
+});
+
 // equipment related api
 
 app.post("/api/addEquipment", async (req, res) => {
@@ -704,3 +708,5 @@ app.put("/api/updateEquipment/:id", async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 });
+
+export default app
