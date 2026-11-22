@@ -709,4 +709,314 @@ app.put("/api/updateEquipment/:id", async (req, res) => {
   }
 });
 
+// ────────────────────────────────────────────────────────────
+// Admin Dashboard APIs   (Challenge 3: Admin Analytics)
+// ────────────────────────────────────────────────────────────
+
+const ADMIN_ROLES = ["customer", "owner", "admin"];
+const EQUIPMENT_STATUSES = ["pending", "approved", "rejected"];
+const BOOKING_STATUSES = ["pending", "confirmed", "active", "completed", "cancelled"];
+
+// GET /api/admin/users
+// Every registered user, newest first — the Admin "All Users" table.
+// Only the fields the table (and role/block actions) need are returned.
+app.get("/api/admin/users", async (req, res) => {
+  try {
+    const users = await usersCollection
+      .find(
+        {},
+        {
+          projection: {
+            name: 1,
+            email: 1,
+            role: 1,
+            image: 1,
+            createdAt: 1,
+            blocked: 1,
+            phoneNumber: 1,
+            address: 1,
+          },
+        }
+      )
+      .sort({ createdAt: -1 })
+      .toArray();
+    res.send(users);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// PATCH /api/admin/users/:id/role   { role: "customer" | "owner" | "admin" }
+// Admin "Change Role" action.
+app.patch("/api/admin/users/:id/role", async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!ObjectId.isValid(id)) {
+      return res.status(400).json({ success: false, message: "Invalid user id" });
+    }
+    const { role } = req.body;
+    if (!ADMIN_ROLES.includes(role)) {
+      return res
+        .status(400)
+        .json({ success: false, message: "Role must be customer, owner or admin" });
+    }
+
+    const result = await usersCollection.updateOne(
+      { _id: new ObjectId(id) },
+      { $set: { role, updatedAt: new Date() } }
+    );
+    if (!result.matchedCount) {
+      return res.status(404).json({ success: false, message: "User not found" });
+    }
+    res.send({ success: true, role });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// PATCH /api/admin/users/:id/block   { blocked: true | false }
+// Admin "Manage Users" action. The flag is written here; access is
+// enforced later by the JWT middlewares (a blocked user is refused
+// a valid token / API access).
+app.patch("/api/admin/users/:id/block", async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!ObjectId.isValid(id)) {
+      return res.status(400).json({ success: false, message: "Invalid user id" });
+    }
+    if (typeof req.body.blocked !== "boolean") {
+      return res.status(400).json({ success: false, message: "blocked must be true or false" });
+    }
+    const { blocked } = req.body;
+
+    const result = await usersCollection.updateOne(
+      { _id: new ObjectId(id) },
+      { $set: { blocked, blockedAt: blocked ? new Date() : null, updatedAt: new Date() } }
+    );
+    if (!result.matchedCount) {
+      return res.status(404).json({ success: false, message: "User not found" });
+    }
+    res.send({ success: true, blocked });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// GET /api/admin/equipment[?status=pending|approved|rejected]
+// Every listing regardless of status — the Admin "All Equipment" table.
+app.get("/api/admin/equipment", async (req, res) => {
+  try {
+    const query = {};
+    if (req.query.status && EQUIPMENT_STATUSES.includes(req.query.status)) {
+      query.status = req.query.status;
+    }
+    const result = await equipmentCollection.find(query).sort({ createdAt: -1 }).toArray();
+    res.send(result);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// PATCH /api/admin/equipment/:id/status   { status: pending | approved | rejected }
+// Admin Approve / Reject action.
+app.patch("/api/admin/equipment/:id/status", async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!ObjectId.isValid(id)) {
+      return res.status(400).json({ success: false, message: "Invalid equipment id" });
+    }
+    const { status } = req.body;
+    if (!EQUIPMENT_STATUSES.includes(status)) {
+      return res
+        .status(400)
+        .json({ success: false, message: "Status must be pending, approved or rejected" });
+    }
+
+    const result = await equipmentCollection.updateOne(
+      { _id: new ObjectId(id) },
+      { $set: { status, reviewedAt: new Date(), updatedAt: new Date() } }
+    );
+    if (!result.matchedCount) {
+      return res.status(404).json({ success: false, message: "Equipment not found" });
+    }
+    res.send({ success: true, status });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// GET /api/admin/bookings
+// All rental records enriched with customer + owner information for the
+// Admin "All Rentals" table (customer name, owner name/email of the
+// equipment that was rented).
+app.get("/api/admin/bookings", async (req, res) => {
+  try {
+    const bookings = await bookingsCollection
+      .find({})
+      .sort({ bookingDate: -1, createdAt: -1 })
+      .toArray();
+
+    // 1. equipment → owner (for owner information)
+    const equipmentIds = [
+      ...new Set(bookings.map((b) => b.equipmentId).filter((id) => ObjectId.isValid(id))),
+    ];
+    const equipment = await equipmentCollection
+      .find({ _id: { $in: equipmentIds.map((id) => new ObjectId(id)) } })
+      .toArray();
+    const equipmentById = new Map(equipment.map((e) => [String(e._id), e]));
+
+    // 2. emails → users (for customer + owner display names)
+    const emails = new Set();
+    bookings.forEach((b) => {
+      if (b.customerEmail) emails.add(b.customerEmail.toLowerCase());
+      const ownerEmail = b.ownerEmail || equipmentById.get(String(b.equipmentId))?.ownerEmail;
+      if (ownerEmail) emails.add(ownerEmail.toLowerCase());
+    });
+    const users = await usersCollection.find({ email: { $in: [...emails] } }).toArray();
+    const userByEmail = new Map(users.map((u) => [u.email.toLowerCase(), u]));
+
+    const result = bookings.map((b) => {
+      const equipmentDoc = equipmentById.get(String(b.equipmentId));
+      const ownerEmail = b.ownerEmail || equipmentDoc?.ownerEmail || "";
+      const customer = userByEmail.get((b.customerEmail || "").toLowerCase());
+      const owner = ownerEmail ? userByEmail.get(ownerEmail.toLowerCase()) : null;
+      return {
+        ...b,
+        customerName: customer?.name || b.customerName || "",
+        customerImage: customer?.image || "",
+        ownerEmail,
+        ownerName: owner?.name || "",
+        equipmentName: b.equipmentName || equipmentDoc?.name || "",
+      };
+    });
+
+    res.send(result);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// PATCH /api/admin/bookings/:id/status   { bookingStatus }
+// Admin can manage rental activity (e.g. mark a booking completed or
+// cancel it) straight from the All Rentals table.
+app.patch("/api/admin/bookings/:id/status", async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!ObjectId.isValid(id)) {
+      return res.status(400).json({ success: false, message: "Invalid booking id" });
+    }
+    const { bookingStatus } = req.body;
+    if (!BOOKING_STATUSES.includes(bookingStatus)) {
+      return res.status(400).json({
+        success: false,
+        message: `bookingStatus must be one of: ${BOOKING_STATUSES.join(", ")}`,
+      });
+    }
+
+    const result = await bookingsCollection.updateOne(
+      { _id: new ObjectId(id) },
+      { $set: { bookingStatus, updatedAt: new Date() } }
+    );
+    if (!result.matchedCount) {
+      return res.status(404).json({ success: false, message: "Booking not found" });
+    }
+    res.send({ success: true, bookingStatus });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// GET /api/admin/analytics   (Challenge 3: Admin Analytics)
+//
+// Data calculated from the users, equipment, bookings AND payments
+// collections: total users, total equipment, total bookings, pending
+// approvals, completed rentals, total revenue and monthly booking
+// statistics for the overview chart.
+app.get("/api/admin/analytics", async (req, res) => {
+  try {
+    const [
+      totalUsers,
+      totalCustomers,
+      totalOwners,
+      totalAdmins,
+      totalEquipment,
+      pendingApprovals,
+      totalBookings,
+      completedRentals,
+      activeRentals,
+      totalPayments,
+      paidPayments,
+    ] = await Promise.all([
+      usersCollection.countDocuments({}),
+      usersCollection.countDocuments({
+        $or: [{ role: "customer" }, { role: { $exists: false } }],
+      }),
+      usersCollection.countDocuments({ role: "owner" }),
+      usersCollection.countDocuments({ role: "admin" }),
+      equipmentCollection.countDocuments({}),
+      equipmentCollection.countDocuments({ status: "pending" }),
+      bookingsCollection.countDocuments({}),
+      bookingsCollection.countDocuments({ bookingStatus: "completed" }),
+      bookingsCollection.countDocuments({
+        $or: [
+          { bookingStatus: "active" },
+          { bookingStatus: "confirmed" },
+          { bookingStatus: "pending" },
+        ],
+      }),
+      paymentsCollection.countDocuments({}),
+      paymentsCollection.find({ payment_status: "paid" }).toArray(),
+    ]);
+
+    // Revenue comes from the payments collection (the money Stripe
+    // actually took), not from the bookings the browser reported.
+    const totalRevenue = paidPayments.reduce(
+      (sum, p) => sum + (Number(p.amount) || 0),
+      0
+    );
+
+    // Monthly booking statistics for the last 6 months (chart data).
+    const monthNames = [
+      "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+      "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ];
+    const now = new Date();
+    const monthlyMap = {};
+    for (let i = 5; i >= 0; i--) {
+      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+      monthlyMap[monthNames[d.getMonth()]] = 0;
+    }
+
+    const allBookings = await bookingsCollection.find({}).toArray();
+    allBookings.forEach((b) => {
+      const d = b.bookingDate ? new Date(b.bookingDate) : new Date(b.createdAt || now);
+      const key = monthNames[d.getMonth()];
+      if (key in monthlyMap) monthlyMap[key] += 1;
+    });
+
+    const monthlyBookings = Object.entries(monthlyMap).map(([month, bookings]) => ({
+      month,
+      bookings,
+    }));
+
+    res.send({
+      success: true,
+      totalUsers,
+      totalCustomers,
+      totalOwners,
+      totalAdmins,
+      totalEquipment,
+      pendingApprovals,
+      totalBookings,
+      completedRentals,
+      activeRentals,
+      totalPayments,
+      totalRevenue,
+      monthlyBookings,
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 export default app
