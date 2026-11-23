@@ -2,6 +2,12 @@ import express from "express";
 import cors from "cors";
 import "dotenv/config";
 import { Stripe } from "stripe";
+import {
+  verifyTokenMiddleware,
+  verifyOwner,
+  verifyRenter,
+  verifyAdmin,
+} from "./middleware/index.js";
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
@@ -49,19 +55,19 @@ app.get("/", (req, res) => {
 
 // equipment related api
 
-app.post("/api/addEquipment", async (req, res) => {
+app.post("/api/addEquipment", verifyTokenMiddleware, verifyOwner, async (req, res) => {
   const equipment = req.body;
   const result = await equipmentCollection.insertOne(equipment);
   res.send(result);
 });
 
-app.post("/api/addFavourite", async (req, res) => {
+app.post("/api/addFavourite", verifyTokenMiddleware, verifyRenter, async (req, res) => {
   const equipment = req.body;
   const result = await favouriteCollection.insertOne(equipment);
   res.send(result);
 });
 
-app.post("/api/addBooking", async (req, res) => {
+app.post("/api/addBooking", verifyTokenMiddleware, verifyRenter, async (req, res) => {
   const equipment = req.body;
   const result = await bookingsCollection.insertOne(equipment);
   res.send(result);
@@ -81,7 +87,7 @@ app.post("/api/addBooking", async (req, res) => {
 // That pending row is what /checkout?paymentId=… displays and what
 // Stripe charges. The real booking document is only created LATER, in
 // /payment/checkout-verify, after Stripe confirms the money arrived.
-app.post("/api/prepareBooking", async (req, res) => {
+app.post("/api/prepareBooking", verifyTokenMiddleware, verifyRenter, async (req, res) => {
   const {
     equipmentId,
     customerId,
@@ -211,7 +217,7 @@ app.post("/api/prepareBooking", async (req, res) => {
   });
 });
 
-app.get("/api/ownerEquipment", async (req, res) => {
+app.get("/api/ownerEquipment", verifyTokenMiddleware, verifyOwner, async (req, res) => {
   const query = {};
   if (req.query) {
     query.ownerEmail = req.query.ownerEmail;
@@ -231,35 +237,86 @@ app.get("/api/equipmentDetails/:id", async (req, res) => {
 app.get("/api/allEquipment", async (req, res) => {
   
   const query = {};
-  if (req.query) {
-    if (req.query.category) {
-      query.category = req.query.category;
-    }
-    if (req.query.rentalType) {
-      query.rentalType = req.query.rentalType;
-    }
-    if (req.query.rentalPrice) {
-      query.rentalPrice = req.query.rentalPrice;
-    }
-    if (req.query.availableQuantity) {
-      query.availableQuantity = req.query.availableQuantity;
-    }
-    if(req.query.status){
-      query.status= req.query.status;
-    }
-    if (req.query.search) {
-      query.$or = [
-        { name: { $regex: req.query.search, $options: "i" } },
-        { location: { $regex: req.query.search, $options: "i" } },
-        { brand: { $regex: req.query.search, $options: "i" } },
-      ];
+
+  // Category — exact match ("all" = no filter).
+  if (req.query.category && req.query.category !== "all") {
+    query.category = req.query.category;
+  }
+
+  // Rental type — exact match ("any" = no filter).
+  if (req.query.rentalType && req.query.rentalType !== "any") {
+    query.rentalType = req.query.rentalType;
+  }
+
+  // Status — exact match (e.g. "approved" for the public listing).
+  if (req.query.status) {
+    query.status = req.query.status;
+  }
+
+  // Availability — "available" (in stock) | "out-of-stock" | "any".
+  if (req.query.availableQuantity === "available") {
+    query.availableQuantity = { $gt: 0 };
+  } else if (req.query.availableQuantity === "out-of-stock") {
+    query.availableQuantity = { $lte: 0 };
+  } else if (
+    req.query.availableQuantity &&
+    req.query.availableQuantity !== "any"
+  ) {
+    // Backwards-compatible: a bare number = exact match.
+    query.availableQuantity = Number(req.query.availableQuantity);
+  }
+
+  // Price range — "min-max" (e.g. "0-500", "500-1000", "1000-"); "any" = no filter.
+  if (req.query.rentalPrice && req.query.rentalPrice !== "any") {
+    const raw = String(req.query.rentalPrice);
+    if (raw.includes("-")) {
+      const [minRaw, maxRaw] = raw.split("-");
+      const range = {};
+      if (minRaw !== "") range.$gte = Number(minRaw);
+      if (maxRaw) range.$lte = Number(maxRaw);
+      if (Object.keys(range).length > 0) query.rentalPrice = range;
+    } else {
+      // Backwards-compatible: a bare number = exact match.
+      query.rentalPrice = Number(raw);
     }
   }
-  const result = await equipmentCollection.find(query).toArray();
+
+  // Search — name / location (searchBy picks the field; default searches both + brand).
+  if (req.query.search) {
+    const rx = { $regex: req.query.search, $options: "i" };
+    if (req.query.searchBy === "location") {
+      query.$or = [{ location: rx }];
+    } else if (req.query.searchBy === "name") {
+      query.$or = [{ name: rx }];
+    } else {
+      query.$or = [{ name: rx }, { location: rx }, { brand: rx }];
+    }
+  }
+
+  let cursor = equipmentCollection.find(query);
+
+  // Sort — "price-low-high" | "price-high-low" | "recently-added" (newest first).
+  // No sort param → natural order (unchanged behaviour for other callers).
+  const sort = req.query.sort;
+  if (sort === "price-low-high") {
+    cursor = cursor.sort({ rentalPrice: 1 });
+  } else if (sort === "price-high-low") {
+    cursor = cursor.sort({ rentalPrice: -1 });
+  } else if (sort === "recently-added") {
+    cursor = cursor.sort({ _id: -1 });
+  }
+
+  // Limit — optional cap on the number of results returned.
+  const limit = parseInt(req.query.limit, 10);
+  if (!Number.isNaN(limit) && limit > 0) {
+    cursor = cursor.limit(limit);
+  }
+
+  const result = await cursor.toArray();
   res.send(result);
 });
 
-app.delete("/api/deleteEquipment/:id", async (req, res) => {
+app.delete("/api/deleteEquipment/:id", verifyTokenMiddleware, verifyOwner, async (req, res) => {
   const { id } = req.params;
   const result = await equipmentCollection.deleteOne({ _id: new ObjectId(id) });
   res.send(result);
@@ -435,7 +492,7 @@ app.post("/payment/checkout-verify", async (req, res) => {
 //   2. res.send(null) sends an EMPTY body → the client crashed with
 //      "Unexpected end of JSON input" inside response.json();
 //   3. a non-ObjectId id made new ObjectId(id) throw → 500, also empty.
-app.get("/api/user/:id/premium", async (req, res) => {
+app.get("/api/user/:id/premium", verifyTokenMiddleware, async (req, res) => {
   const { id } = req.params;
 
   if (!ObjectId.isValid(id)) {
@@ -463,7 +520,7 @@ app.get("/api/user/:id/premium", async (req, res) => {
 
 // GET /api/customerBookings?email=...
 // Returns all bookings made by this customer
-app.get("/api/customerBookings", async (req, res) => {
+app.get("/api/customerBookings", verifyTokenMiddleware, verifyRenter, async (req, res) => {
   try {
     const { email } = req.query;
     const query = {};
@@ -486,7 +543,7 @@ app.get("/api/customerBookings", async (req, res) => {
 
 // GET /api/customerFavourites?email=...
 // Returns all saved favorite equipment for this customer
-app.get("/api/customerFavourites", async (req, res) => {
+app.get("/api/customerFavourites", verifyTokenMiddleware, verifyRenter, async (req, res) => {
   try {
     const { email } = req.query;
     const query = {};
@@ -509,7 +566,7 @@ app.get("/api/customerFavourites", async (req, res) => {
 
 // DELETE /api/removeFavourite/:id
 // Removes an item from the customer's favorites
-app.delete("/api/removeFavourite/:id", async (req, res) => {
+app.delete("/api/removeFavourite/:id", verifyTokenMiddleware, verifyRenter, async (req, res) => {
   try {
     const { id } = req.params;
     let query = {};
@@ -527,7 +584,7 @@ app.delete("/api/removeFavourite/:id", async (req, res) => {
 
 // GET /api/user/profile?email=...
 // Returns the profile information of the user
-app.get("/api/user/profile", async (req, res) => {
+app.get("/api/user/profile", verifyTokenMiddleware, async (req, res) => {
   try {
     const { email } = req.query;
     if (!email) {
@@ -545,7 +602,7 @@ app.get("/api/user/profile", async (req, res) => {
 
 // PUT /api/user/profile
 // Updates the user profile details (name, image, phoneNumber, address)
-app.put("/api/user/profile", async (req, res) => {
+app.put("/api/user/profile", verifyTokenMiddleware, async (req, res) => {
   try {
     const { email, name, image, phoneNumber, address } = req.body;
     if (!email) {
@@ -574,7 +631,7 @@ app.put("/api/user/profile", async (req, res) => {
 
 // GET /api/ownerRentals?ownerEmail=...
 // Returns all rental bookings made on the owner's equipment
-app.get("/api/ownerRentals", async (req, res) => {
+app.get("/api/ownerRentals", verifyTokenMiddleware, verifyOwner, async (req, res) => {
   try {
     const { ownerEmail } = req.query;
     if (!ownerEmail) {
@@ -609,7 +666,7 @@ app.get("/api/ownerRentals", async (req, res) => {
 });
 
 // GET /api/ownerAnalytics?ownerEmail=... (Challenge 3: Owner Analytics)
-app.get("/api/ownerAnalytics", async (req, res) => {
+app.get("/api/ownerAnalytics", verifyTokenMiddleware, verifyOwner, async (req, res) => {
   try {
     const { ownerEmail } = req.query;
     if (!ownerEmail) {
@@ -690,7 +747,7 @@ app.get("/api/ownerAnalytics", async (req, res) => {
 
 // PUT /api/updateEquipment/:id
 // Updates one equipment listing
-app.put("/api/updateEquipment/:id", async (req, res) => {
+app.put("/api/updateEquipment/:id", verifyTokenMiddleware, verifyOwner, async (req, res) => {
   try {
     const { id } = req.params;
     if (!ObjectId.isValid(id)) {
@@ -720,7 +777,7 @@ const BOOKING_STATUSES = ["pending", "confirmed", "active", "completed", "cancel
 // GET /api/admin/users
 // Every registered user, newest first — the Admin "All Users" table.
 // Only the fields the table (and role/block actions) need are returned.
-app.get("/api/admin/users", async (req, res) => {
+app.get("/api/admin/users", verifyTokenMiddleware, verifyAdmin, async (req, res) => {
   try {
     const users = await usersCollection
       .find(
@@ -748,7 +805,7 @@ app.get("/api/admin/users", async (req, res) => {
 
 // PATCH /api/admin/users/:id/role   { role: "customer" | "owner" | "admin" }
 // Admin "Change Role" action.
-app.patch("/api/admin/users/:id/role", async (req, res) => {
+app.patch("/api/admin/users/:id/role", verifyTokenMiddleware, verifyAdmin, async (req, res) => {
   try {
     const { id } = req.params;
     if (!ObjectId.isValid(id)) {
@@ -778,7 +835,7 @@ app.patch("/api/admin/users/:id/role", async (req, res) => {
 // Admin "Manage Users" action. The flag is written here; access is
 // enforced later by the JWT middlewares (a blocked user is refused
 // a valid token / API access).
-app.patch("/api/admin/users/:id/block", async (req, res) => {
+app.patch("/api/admin/users/:id/block", verifyTokenMiddleware, verifyAdmin, async (req, res) => {
   try {
     const { id } = req.params;
     if (!ObjectId.isValid(id)) {
@@ -801,10 +858,9 @@ app.patch("/api/admin/users/:id/block", async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 });
-
 // GET /api/admin/equipment[?status=pending|approved|rejected]
 // Every listing regardless of status — the Admin "All Equipment" table.
-app.get("/api/admin/equipment", async (req, res) => {
+app.get("/api/admin/equipment", verifyTokenMiddleware, verifyAdmin, async (req, res) => {
   try {
     const query = {};
     if (req.query.status && EQUIPMENT_STATUSES.includes(req.query.status)) {
@@ -819,7 +875,7 @@ app.get("/api/admin/equipment", async (req, res) => {
 
 // PATCH /api/admin/equipment/:id/status   { status: pending | approved | rejected }
 // Admin Approve / Reject action.
-app.patch("/api/admin/equipment/:id/status", async (req, res) => {
+app.patch("/api/admin/equipment/:id/status", verifyTokenMiddleware, verifyAdmin, async (req, res) => {
   try {
     const { id } = req.params;
     if (!ObjectId.isValid(id)) {
@@ -849,7 +905,7 @@ app.patch("/api/admin/equipment/:id/status", async (req, res) => {
 // All rental records enriched with customer + owner information for the
 // Admin "All Rentals" table (customer name, owner name/email of the
 // equipment that was rented).
-app.get("/api/admin/bookings", async (req, res) => {
+app.get("/api/admin/bookings", verifyTokenMiddleware, verifyAdmin, async (req, res) => {
   try {
     const bookings = await bookingsCollection
       .find({})
@@ -899,7 +955,7 @@ app.get("/api/admin/bookings", async (req, res) => {
 // PATCH /api/admin/bookings/:id/status   { bookingStatus }
 // Admin can manage rental activity (e.g. mark a booking completed or
 // cancel it) straight from the All Rentals table.
-app.patch("/api/admin/bookings/:id/status", async (req, res) => {
+app.patch("/api/admin/bookings/:id/status", verifyTokenMiddleware, verifyAdmin, async (req, res) => {
   try {
     const { id } = req.params;
     if (!ObjectId.isValid(id)) {
@@ -932,7 +988,7 @@ app.patch("/api/admin/bookings/:id/status", async (req, res) => {
 // collections: total users, total equipment, total bookings, pending
 // approvals, completed rentals, total revenue and monthly booking
 // statistics for the overview chart.
-app.get("/api/admin/analytics", async (req, res) => {
+app.get("/api/admin/analytics", verifyTokenMiddleware, verifyAdmin, async (req, res) => {
   try {
     const [
       totalUsers,
